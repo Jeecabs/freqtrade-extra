@@ -21,7 +21,6 @@ class UvicornServer(uvicorn.Server):
         self.thread.start()
         while not self.started:
             time.sleep(1e-3)
-
     def cleanup(self):
         self.should_exit = True
         self.thread.join()

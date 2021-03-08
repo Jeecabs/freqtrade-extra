@@ -123,6 +123,8 @@ class ApiServer(RPCHandler):
                                   host=rest_ip,
                                   use_colors=False,
                                   log_config=log_config,
+                                  # For below see https://github.com/encode/uvicorn/issues/742 (Jan 15th - User roboto84 for more details)
+                                  loop="asyncio",
                                   access_log=True if verbosity != 'error' else False,
                                   )
         try:
