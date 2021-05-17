@@ -41,3 +41,6 @@ colorama==0.4.4
 # Building config files interactively
 questionary==1.9.0
 prompt-toolkit==3.0.18
+
+# Requirement(s) for extra feature(s) (Fork exclusive)
+hjson==3.0.2 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import rapidjson
+import hjson
 
 from freqtrade.exceptions import OperationalException
 
@@ -70,3 +71,28 @@ def load_config_file(path: str) -> Dict[str, Any]:
         )
 
     return config
+
+def load_config_file_hjson(path: str) -> Dict[str, Any]:
+    """
+    Loads a config file from the given path
+    :param path: path as str
+    :return: configuration as dictionary
+    """
+    try:
+        # Read config from stdin if requested in the options
+        with open(path) if path != '-' else sys.stdin as file:
+            config = hjson.load(file)
+    except FileNotFoundError:
+        raise OperationalException(
+            f'Config file "{path}" not found!'
+            ' Please create a config file or check whether it exists.')
+    except rapidjson.JSONDecodeError as e:
+        err_range = log_config_error_range(path, str(e))
+        raise OperationalException(
+            f'{e}\n'
+            f'Please verify the following segment of your configuration:\n{err_range}'
+            if err_range else 'Please verify your configuration file for syntax errors.'
+        )
+
+    return config
+

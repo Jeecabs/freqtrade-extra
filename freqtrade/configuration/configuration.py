@@ -11,7 +11,7 @@ from freqtrade import constants
 from freqtrade.configuration.check_exchange import check_exchange
 from freqtrade.configuration.deprecated_settings import process_temporary_deprecated_settings
 from freqtrade.configuration.directory_operations import create_datadir, create_userdata_dir
-from freqtrade.configuration.load_config import load_config_file, load_file
+from freqtrade.configuration.load_config import load_config_file, load_file, load_config_file_hjson
 from freqtrade.exceptions import OperationalException
 from freqtrade.loggers import setup_logging
 from freqtrade.misc import deep_merge_dicts
@@ -54,6 +54,7 @@ class Configuration:
         :param files: List of file paths
         :return: configuration dictionary
         """
+   
         c = Configuration({'config': files}, RunMode.OTHER)
         return c.get_config()
 
@@ -67,10 +68,16 @@ class Configuration:
 
         # We expect here a list of config filenames
         for path in files:
-            logger.info(f'Using config: {path} ...')
+            if ".json" in str(path):
+                logger.info(f'Using config: {path} ...')
+                # Merge config options, overwriting old values
+                config = deep_merge_dicts(load_config_file(path), config)
+            elif ".hjson" in str(path):
+                logger.info(f'Using config (HJSON): {path} ...')
+                # Merge config options, overwriting old values
+                config = deep_merge_dicts(load_config_file_hjson(path), config)
 
-            # Merge config options, overwriting old values
-            config = deep_merge_dicts(load_config_file(path), config)
+     
 
         # Normalize config
         if 'internals' not in config:
@@ -93,7 +100,7 @@ class Configuration:
 
         # Keep a copy of the original configuration file
         config['original_config'] = deepcopy(config)
-
+    
         self._process_logging_options(config)
 
         self._process_runmode(config)

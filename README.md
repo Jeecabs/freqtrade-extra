@@ -1,7 +1,13 @@
-# Planned changes to come (basically where this fork will differ)
+# Planned changes to come (basically where this fork will differ from the main repo)
  
-- Add Hjson support (https://hjson.github.io/try.html) for in-line comment support.
-- "Bring your own UI" support (e.g. "install-ui" will allow for HTTP endpoint to be specified instead of being hard-coded.) This will be strict in terms of what is expected (e.g. Zip files only).
+- Add .hjson support (https://hjson.github.io/try.html) for in-line comment support to better document reasoning behind configuration decisions.
+- "Bring your own UI" support (e.g. "install-ui" will allow for HTTP endpoint to be specified instead of being hard-coded to freqUI.) This will be strict in terms of what is expected (e.g. Zip files only).
+
+## Purpose of the fork
+
+This fork is only meant to add small quality of life changes that I (the author) believe would improve workflow & the overall research experience.
+
+For the forseeable future this fork will be function the same as the original project does with added non-breaking features.
 
 
 # READ ME from the original project

@@ -67,5 +67,6 @@ dependencies:
         - flake8-type-annotations
         - ccxt
         - flake8-tidy-imports
+        - hjson
         - -e .
     # - python-rapidjso
