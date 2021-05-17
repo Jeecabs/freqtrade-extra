@@ -1,3 +1,11 @@
+# Planned changes to come (basically where this fork will differ)
+ 
+- Add Hjson support (https://hjson.github.io/try.html) for in-line comment support.
+- "Bring your own UI" support (e.g. "install-ui" will allow for HTTP endpoint to be specified instead of being hard-coded.) This will be strict in terms of what is expected (e.g. Zip files only).
+
+
+# READ ME from the original project
+
 # ![freqtrade](https://raw.githubusercontent.com/freqtrade/freqtrade/develop/docs/assets/freqtrade_poweredby.svg)
 
 [![Freqtrade CI](https://github.com/freqtrade/freqtrade/workflows/Freqtrade%20CI/badge.svg)](https://github.com/freqtrade/freqtrade/actions/)
