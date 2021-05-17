@@ -1,13 +1,26 @@
-# Planned changes to come (basically where this fork will differ from the main repo)
+# Purpose of the fork
+
+This fork is only meant to add small quality of life changes that I (the author) believe would improve workflow & overall enjoyment of the tuning process.
+
+For the forseeable future this fork will be function the same as the original project does with added non-breaking features. 
+
+## Differences / Added features
+
+- [Hjson](https://hjson.github.io/) support (To allow for documentation within the config file(s))
+## Planned changes.
  
-- Add .hjson support (https://hjson.github.io/try.html) for in-line comment support to better document reasoning behind configuration decisions.
 - "Bring your own UI" support (e.g. "install-ui" will allow for HTTP endpoint to be specified instead of being hard-coded to freqUI.) This will be strict in terms of what is expected (e.g. Zip files only).
 
-## Purpose of the fork
 
-This fork is only meant to add small quality of life changes that I (the author) believe would improve workflow & the overall research experience.
+- "Send & Reload Config" via the REST API the user will have the ability to send a new config file & (assuming validation tests pass) Freqtrade will reload with the new config file. Will be disabled by default.
 
-For the forseeable future this fork will be function the same as the original project does with added non-breaking features.
+
+<br> </br>
+
+<br> </br>
+
+<br> </br>
+
 
 
 # READ ME from the original project
