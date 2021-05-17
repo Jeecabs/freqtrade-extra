@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -7,14 +7,15 @@ import pytest
 from arrow import Arrow
 
 from freqtrade.configuration import TimeRange
-from freqtrade.constants import LAST_BT_RESULT_FN
+from freqtrade.constants import DATETIME_PRINT_FORMAT, LAST_BT_RESULT_FN
 from freqtrade.data import history
 from freqtrade.data.btanalysis import get_latest_backtest_filename, load_backtest_data
 from freqtrade.edge import PairInfo
 from freqtrade.optimize.optimize_reports import (generate_backtest_stats, generate_daily_stats,
                                                  generate_edge_table, generate_pair_metrics,
                                                  generate_sell_reason_stats,
-                                                 generate_strategy_metrics, store_backtest_stats,
+                                                 generate_strategy_comparison,
+                                                 generate_trading_stats, store_backtest_stats,
                                                  text_table_bt_results, text_table_sell_reason,
                                                  text_table_strategy)
 from freqtrade.resolvers.strategy_resolver import StrategyResolver
@@ -48,7 +49,7 @@ def test_text_table_bt_results():
     )
 
     pair_results = generate_pair_metrics(data={'ETH/BTC': {}}, stake_currency='BTC',
-                                         max_open_trades=2, results=results)
+                                         starting_balance=4, results=results)
     assert text_table_bt_results(pair_results, stake_currency='BTC') == result_str
 
 
@@ -73,11 +74,13 @@ def test_generate_backtest_stats(default_conf, testdatadir):
                                  "close_rate": [0.002546, 0.003014, 0.003103, 0.003217],
                                  "trade_duration": [123, 34, 31, 14],
                                  "is_open": [False, False, False, True],
+                                 "stake_amount": [0.01, 0.01, 0.01, 0.01],
                                  "sell_reason": [SellType.ROI, SellType.STOP_LOSS,
                                                  SellType.ROI, SellType.FORCE_SELL]
                                  }),
         'config': default_conf,
         'locks': [],
+        'final_balance': 1000.02,
         'backtest_start_time': Arrow.utcnow().int_timestamp,
         'backtest_end_time': Arrow.utcnow().int_timestamp,
         }
@@ -94,12 +97,13 @@ def test_generate_backtest_stats(default_conf, testdatadir):
     assert 'DefStrat' in stats['strategy']
     assert 'strategy_comparison' in stats
     strat_stats = stats['strategy']['DefStrat']
-    assert strat_stats['backtest_start'] == min_date.datetime
-    assert strat_stats['backtest_end'] == max_date.datetime
+    assert strat_stats['backtest_start'] == min_date.strftime(DATETIME_PRINT_FORMAT)
+    assert strat_stats['backtest_end'] == max_date.strftime(DATETIME_PRINT_FORMAT)
     assert strat_stats['total_trades'] == len(results['DefStrat']['results'])
     # Above sample had no loosing trade
     assert strat_stats['max_drawdown'] == 0.0
 
+    # Retry with losing trade
     results = {'DefStrat': {
         'results': pd.DataFrame(
             {"pair": ["UNITTEST/BTC", "UNITTEST/BTC", "UNITTEST/BTC", "UNITTEST/BTC"],
@@ -116,18 +120,31 @@ def test_generate_backtest_stats(default_conf, testdatadir):
              "open_rate": [0.002543, 0.003003, 0.003089, 0.003214],
              "close_rate": [0.002546, 0.003014, 0.0032903, 0.003217],
              "trade_duration": [123, 34, 31, 14],
-             "open_at_end": [False, False, False, True],
-             "sell_reason": [SellType.ROI, SellType.STOP_LOSS,
-                             SellType.ROI, SellType.FORCE_SELL]
+             "is_open": [False, False, False, True],
+             "stake_amount": [0.01, 0.01, 0.01, 0.01],
+             "sell_reason": [SellType.ROI, SellType.ROI,
+                             SellType.STOP_LOSS, SellType.FORCE_SELL]
              }),
-        'config': default_conf}
+        'config': default_conf,
+        'locks': [],
+        'final_balance': 1000.02,
+        'backtest_start_time': Arrow.utcnow().int_timestamp,
+        'backtest_end_time': Arrow.utcnow().int_timestamp,
+        }
     }
 
-    assert strat_stats['max_drawdown'] == 0.0
-    assert strat_stats['drawdown_start'] == datetime(1970, 1, 1, tzinfo=timezone.utc)
-    assert strat_stats['drawdown_end'] == datetime(1970, 1, 1, tzinfo=timezone.utc)
-    assert strat_stats['drawdown_end_ts'] == 0
-    assert strat_stats['drawdown_start_ts'] == 0
+    stats = generate_backtest_stats(btdata, results, min_date, max_date)
+    assert isinstance(stats, dict)
+    assert 'strategy' in stats
+    assert 'DefStrat' in stats['strategy']
+    assert 'strategy_comparison' in stats
+    strat_stats = stats['strategy']['DefStrat']
+
+    assert strat_stats['max_drawdown'] == 0.013803
+    assert strat_stats['drawdown_start'] == '2017-11-14 22:10:00'
+    assert strat_stats['drawdown_end'] == '2017-11-14 22:43:00'
+    assert strat_stats['drawdown_end_ts'] == 1510699380000
+    assert strat_stats['drawdown_start_ts'] == 1510697400000
     assert strat_stats['pairlist'] == ['UNITTEST/BTC']
 
     # Test storing stats
@@ -189,7 +206,7 @@ def test_generate_pair_metrics():
     )
 
     pair_results = generate_pair_metrics(data={'ETH/BTC': {}}, stake_currency='BTC',
-                                         max_open_trades=2, results=results)
+                                         starting_balance=2, results=results)
     assert isinstance(pair_results, list)
     assert len(pair_results) == 2
     assert pair_results[-1]['key'] == 'TOTAL'
@@ -210,8 +227,6 @@ def test_generate_daily_stats(testdatadir):
     assert res['winning_days'] == 14
     assert res['draw_days'] == 4
     assert res['losing_days'] == 3
-    assert res['winner_holding_avg'] == timedelta(seconds=1440)
-    assert res['loser_holding_avg'] == timedelta(days=1, seconds=21420)
 
     # Select empty dataframe!
     res = generate_daily_stats(bt_data.loc[bt_data['open_date'] == '2000-01-01', :])
@@ -220,6 +235,23 @@ def test_generate_daily_stats(testdatadir):
     assert res['winning_days'] == 0
     assert res['draw_days'] == 0
     assert res['losing_days'] == 0
+
+
+def test_generate_trading_stats(testdatadir):
+    filename = testdatadir / "backtest-result_new.json"
+    bt_data = load_backtest_data(filename)
+    res = generate_trading_stats(bt_data)
+    assert isinstance(res, dict)
+    assert res['winner_holding_avg'] == timedelta(seconds=1440)
+    assert res['loser_holding_avg'] == timedelta(days=1, seconds=21420)
+    assert 'wins' in res
+    assert 'losses' in res
+    assert 'draws' in res
+
+    # Select empty dataframe!
+    res = generate_trading_stats(bt_data.loc[bt_data['open_date'] == '2000-01-01', :])
+    assert res['wins'] == 0
+    assert res['losses'] == 0
 
 
 def test_text_table_sell_reason():
@@ -265,7 +297,7 @@ def test_generate_sell_reason_stats():
             'wins': [2, 0, 0],
             'draws': [0, 0, 0],
             'losses': [0, 0, 1],
-            'sell_reason': [SellType.ROI, SellType.ROI, SellType.STOP_LOSS]
+            'sell_reason': [SellType.ROI.value, SellType.ROI.value, SellType.STOP_LOSS.value]
         }
     )
 
@@ -291,6 +323,7 @@ def test_generate_sell_reason_stats():
 
 def test_text_table_strategy(default_conf):
     default_conf['max_open_trades'] = 2
+    default_conf['dry_run_wallet'] = 3
     results = {}
     results['TestStrategy1'] = {'results': pd.DataFrame(
         {
@@ -323,12 +356,12 @@ def test_text_table_strategy(default_conf):
         '|---------------+--------+----------------+----------------+------------------+'
         '----------------+----------------+--------+---------+----------|\n'
         '| TestStrategy1 |      3 |          20.00 |          60.00 |       1.10000000 |'
-        '          30.00 |        0:17:00 |      3 |       0 |        0 |\n'
+        '          36.67 |        0:17:00 |      3 |       0 |        0 |\n'
         '| TestStrategy2 |      3 |          30.00 |          90.00 |       1.30000000 |'
-        '          45.00 |        0:20:00 |      3 |       0 |        0 |'
+        '          43.33 |        0:20:00 |      3 |       0 |        0 |'
     )
 
-    strategy_results = generate_strategy_metrics(all_results=results)
+    strategy_results = generate_strategy_comparison(all_results=results)
 
     assert text_table_strategy(strategy_results, 'BTC') == result_str
 
