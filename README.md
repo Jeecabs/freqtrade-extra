@@ -7,6 +7,8 @@ For the forseeable future this fork will be function the same as the original pr
 ## Differences / Added features
 
 - [Hjson](https://hjson.github.io/) support (To allow for documentation within the config file(s))
+
+Commands such as ```freqtrade trade -c config.hjson ``` will now work.
 ## Planned changes.
  
 - "Bring your own UI" support (e.g. "install-ui" will allow for HTTP endpoint to be specified instead of being hard-coded to freqUI.) This will be strict in terms of what is expected (e.g. Zip files only).
