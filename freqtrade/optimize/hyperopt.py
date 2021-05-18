@@ -185,7 +185,8 @@ class Hyperopt:
         if HyperoptTools.has_space(self.config, 'sell'):
             result['sell'] = {p.name: params.get(p.name) for p in self.sell_space}
         if HyperoptTools.has_space(self.config, 'roi'):
-            result['roi'] = self.custom_hyperopt.generate_roi_table(params)
+            result['roi'] = {str(k): v for k, v in
+                             self.custom_hyperopt.generate_roi_table(params).items()}
         if HyperoptTools.has_space(self.config, 'stoploss'):
             result['stoploss'] = {p.name: params.get(p.name) for p in self.stoploss_space}
         if HyperoptTools.has_space(self.config, 'trailing'):
@@ -270,7 +271,7 @@ class Hyperopt:
             self.backtesting.strategy.trailing_only_offset_is_reached = \
                 d['trailing_only_offset_is_reached']
 
-        processed = load(self.data_pickle_file, mmap_mode='r+')
+        processed = load(self.data_pickle_file, mmap_mode='r')
 
         bt_results = self.backtesting.backtest(
             processed=processed,
