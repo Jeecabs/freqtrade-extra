@@ -38,15 +38,15 @@ def deploy_new_strategy(strategy_name: str, strategy_path: Path, subtemplate: st
     indicators = render_template_with_fallback(
         templatefile=f"subtemplates/indicators_{subtemplate}.j2",
         templatefallbackfile=f"subtemplates/indicators_{fallback}.j2",
-        )
+    )
     buy_trend = render_template_with_fallback(
         templatefile=f"subtemplates/buy_trend_{subtemplate}.j2",
         templatefallbackfile=f"subtemplates/buy_trend_{fallback}.j2",
-        )
+    )
     sell_trend = render_template_with_fallback(
         templatefile=f"subtemplates/sell_trend_{subtemplate}.j2",
         templatefallbackfile=f"subtemplates/sell_trend_{fallback}.j2",
-        )
+    )
     plot_config = render_template_with_fallback(
         templatefile=f"subtemplates/plot_config_{subtemplate}.j2",
         templatefallbackfile=f"subtemplates/plot_config_{fallback}.j2",
@@ -97,19 +97,19 @@ def deploy_new_hyperopt(hyperopt_name: str, hyperopt_path: Path, subtemplate: st
     buy_guards = render_template_with_fallback(
         templatefile=f"subtemplates/hyperopt_buy_guards_{subtemplate}.j2",
         templatefallbackfile=f"subtemplates/hyperopt_buy_guards_{fallback}.j2",
-        )
+    )
     sell_guards = render_template_with_fallback(
         templatefile=f"subtemplates/hyperopt_sell_guards_{subtemplate}.j2",
         templatefallbackfile=f"subtemplates/hyperopt_sell_guards_{fallback}.j2",
-        )
+    )
     buy_space = render_template_with_fallback(
         templatefile=f"subtemplates/hyperopt_buy_space_{subtemplate}.j2",
         templatefallbackfile=f"subtemplates/hyperopt_buy_space_{fallback}.j2",
-        )
+    )
     sell_space = render_template_with_fallback(
         templatefile=f"subtemplates/hyperopt_sell_space_{subtemplate}.j2",
         templatefallbackfile=f"subtemplates/hyperopt_sell_space_{fallback}.j2",
-        )
+    )
 
     strategy_text = render_template(templatefile='base_hyperopt.py.j2',
                                     arguments={"hyperopt": hyperopt_name,
@@ -182,8 +182,7 @@ def download_and_install_ui(dest_folder: Path, dl_url: str, version: str):
         f.write(version)
 
 
-def get_ui_download_url() -> Tuple[str, str]:
-    base_url = 'https://api.github.com/repos/freqtrade/frequi/'
+def get_ui_download_url(base_url='https://api.github.com/repos/freqtrade/frequi/') -> Tuple[str, str]:
     # Get base UI Repo path
 
     resp = requests.get(f"{base_url}releases")
@@ -210,8 +209,20 @@ def start_install_ui(args: Dict[str, Any]) -> None:
 
     dest_folder = Path(__file__).parents[1] / 'rpc/api_server/ui/installed/'
     # First make sure the assets are removed.
-    dl_url, latest_version = get_ui_download_url()
-
+    if args.get('custom_ui_endpoint') is None:
+        dl_url, latest_version = get_ui_download_url()
+    else:
+        # TODO Be able to figure out if the link is valid without HTTP/HTTPS checks
+        ENDPOINT_TEMP = args.get('custom_ui_endpoint')
+        if 'https://' in ENDPOINT_TEMP:
+            dl_url, latest_version = get_ui_download_url(ENDPOINT_TEMP)
+        elif 'http://' in ENDPOINT_TEMP:
+            logger.info(f"Warning HTTP connection specified.")
+            dl_url, latest_version = get_ui_download_url(ENDPOINT_TEMP)
+        else:
+            logger.info(f"UI already up-to-date, FreqUI Version {curr_version}.")
+            # TODO Something better with this
+            return
     curr_version = read_ui_version(dest_folder)
     if curr_version == latest_version and not args.get('erase_ui_only'):
         logger.info(f"UI already up-to-date, FreqUI Version {curr_version}.")

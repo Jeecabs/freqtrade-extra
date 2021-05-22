@@ -71,7 +71,7 @@ ARGS_PLOT_DATAFRAME = ["pairs", "indicators1", "indicators2", "plot_limit",
 ARGS_PLOT_PROFIT = ["pairs", "timerange", "export", "exportfilename", "db_url",
                     "trade_source", "timeframe"]
 
-ARGS_INSTALL_UI = ["erase_ui_only"]
+ARGS_INSTALL_UI = ["erase_ui_only", "custom_ui_endpoint"]
 
 ARGS_SHOW_TRADES = ["db_url", "trade_ids", "print_json"]
 

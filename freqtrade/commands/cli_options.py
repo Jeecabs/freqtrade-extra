@@ -404,6 +404,11 @@ AVAILABLE_CLI_OPTIONS = {
         action='store_true',
         default=False,
     ),
+    "custom_ui_endpoint": Arg(
+        '--endpoint',
+        help="HTTP Endpoint for custom Freqtrade UI.",
+        required=False
+    ),
     # Templating options
     "template": Arg(
         '--template',
