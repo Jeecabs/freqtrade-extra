@@ -1,4 +1,3 @@
-
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -70,7 +69,6 @@ def test_add_indicators(default_conf, testdatadir, caplog):
     indicators1 = {"ema10": {}}
     indicators2 = {"macd": {"color": "red"}}
 
-    default_conf.update({'strategy': 'DefaultStrategy'})
     strategy = StrategyResolver.load_strategy(default_conf)
 
     # Generate buy/sell signals and indicators
@@ -112,7 +110,6 @@ def test_add_areas(default_conf, testdatadir, caplog):
                              "fill_to": "macdhist"}}
 
     ind_plain = {"macd": {"fill_to": "macdhist"}}
-    default_conf.update({'strategy': 'DefaultStrategy'})
     strategy = StrategyResolver.load_strategy(default_conf)
 
     # Generate buy/sell signals and indicators
@@ -174,7 +171,7 @@ def test_plot_trades(testdatadir, caplog):
     assert len(trades) == len(trade_buy.x)
     assert trade_buy.marker.color == 'cyan'
     assert trade_buy.marker.symbol == 'circle-open'
-    assert trade_buy.text[0] == '4.0%, roi, 15 min'
+    assert trade_buy.text[0] == '3.99%, roi, 15 min'
 
     trade_sell = find_trace_in_fig_data(figure.data, 'Sell - Profit')
     assert isinstance(trade_sell, go.Scatter)
@@ -182,7 +179,7 @@ def test_plot_trades(testdatadir, caplog):
     assert len(trades.loc[trades['profit_ratio'] > 0]) == len(trade_sell.x)
     assert trade_sell.marker.color == 'green'
     assert trade_sell.marker.symbol == 'square-open'
-    assert trade_sell.text[0] == '4.0%, roi, 15 min'
+    assert trade_sell.text[0] == '3.99%, roi, 15 min'
 
     trade_sell_loss = find_trace_in_fig_data(figure.data, 'Sell - Loss')
     assert isinstance(trade_sell_loss, go.Scatter)
@@ -190,7 +187,7 @@ def test_plot_trades(testdatadir, caplog):
     assert len(trades.loc[trades['profit_ratio'] <= 0]) == len(trade_sell_loss.x)
     assert trade_sell_loss.marker.color == 'red'
     assert trade_sell_loss.marker.symbol == 'square-open'
-    assert trade_sell_loss.text[5] == '-10.4%, stop_loss, 720 min'
+    assert trade_sell_loss.text[5] == '-10.45%, stop_loss, 720 min'
 
 
 def test_generate_candlestick_graph_no_signals_no_trades(default_conf, mocker, testdatadir, caplog):
@@ -239,7 +236,6 @@ def test_generate_candlestick_graph_no_trades(default_conf, mocker, testdatadir)
     data = history.load_pair_history(pair=pair, timeframe='1m',
                                      datadir=testdatadir, timerange=timerange)
 
-    default_conf.update({'strategy': 'DefaultStrategy'})
     strategy = StrategyResolver.load_strategy(default_conf)
 
     # Generate buy/sell signals and indicators
@@ -364,7 +360,7 @@ def test_start_plot_dataframe(mocker):
     aup = mocker.patch("freqtrade.plot.plotting.load_and_plot_trades", MagicMock())
     args = [
         "plot-dataframe",
-        "--config", "config_bittrex.json.example",
+        "--config", "config_examples/config_bittrex.example.json",
         "--pairs", "ETH/BTC"
     ]
     start_plot_dataframe(get_args(args))
@@ -408,7 +404,7 @@ def test_start_plot_profit(mocker):
     aup = mocker.patch("freqtrade.plot.plotting.plot_profit", MagicMock())
     args = [
         "plot-profit",
-        "--config", "config_bittrex.json.example",
+        "--config", "config_examples/config_bittrex.example.json",
         "--pairs", "ETH/BTC"
     ]
     start_plot_profit(get_args(args))
@@ -460,7 +456,11 @@ def test_plot_profit(default_conf, mocker, testdatadir):
     assert store_mock.call_count == 1
 
     assert profit_mock.call_args_list[0][0][0] == default_conf['pairs']
-    assert store_mock.call_args_list[0][1]['auto_open'] is True
+    assert store_mock.call_args_list[0][1]['auto_open'] is False
+
+    del default_conf['timeframe']
+    with pytest.raises(OperationalException, match=r"Timeframe must be set.*--timeframe.*"):
+        plot_profit(default_conf)
 
 
 @pytest.mark.parametrize("ind1,ind2,plot_conf,exp", [

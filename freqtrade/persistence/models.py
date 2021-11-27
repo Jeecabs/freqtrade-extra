@@ -2,21 +2,19 @@
 This module contains the class to persist trades into SQLite
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer, String,
                         create_engine, desc, func, inspect)
 from sqlalchemy.exc import NoSuchModuleError
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Query, relationship
-from sqlalchemy.orm.scoping import scoped_session
-from sqlalchemy.orm.session import sessionmaker
+from sqlalchemy.orm import Query, declarative_base, relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.sql.schema import UniqueConstraint
 
-from freqtrade.constants import DATETIME_PRINT_FORMAT
+from freqtrade.constants import DATETIME_PRINT_FORMAT, NON_OPEN_EXCHANGE_STATES
+from freqtrade.enums import SellType
 from freqtrade.exceptions import DependencyException, OperationalException
 from freqtrade.misc import safe_value_fallback
 from freqtrade.persistence.migrations import check_migrate
@@ -41,16 +39,18 @@ def init_db(db_url: str, clean_open_orders: bool = False) -> None:
     """
     kwargs = {}
 
-    # Take care of thread ownership if in-memory db
     if db_url == 'sqlite://':
         kwargs.update({
-            'connect_args': {'check_same_thread': False},
             'poolclass': StaticPool,
-            'echo': False,
+        })
+    # Take care of thread ownership
+    if db_url.startswith('sqlite://'):
+        kwargs.update({
+            'connect_args': {'check_same_thread': False},
         })
 
     try:
-        engine = create_engine(db_url, **kwargs)
+        engine = create_engine(db_url, future=True, **kwargs)
     except NoSuchModuleError:
         raise OperationalException(f"Given value for db_url: '{db_url}' "
                                    f"is no valid database URL! (See {_SQL_DOCS_URL})")
@@ -58,7 +58,7 @@ def init_db(db_url: str, clean_open_orders: bool = False) -> None:
     # https://docs.sqlalchemy.org/en/13/orm/contextual.html#thread-local-scope
     # Scoped sessions proxy requests to the appropriate thread-local session.
     # We should use the scoped_session object - not a seperately initialized version
-    Trade._session = scoped_session(sessionmaker(bind=engine, autoflush=True, autocommit=True))
+    Trade._session = scoped_session(sessionmaker(bind=engine, autoflush=True))
     Trade.query = Trade._session.query_property()
     Order.query = Trade._session.query_property()
     PairLock.query = Trade._session.query_property()
@@ -77,7 +77,7 @@ def cleanup_db() -> None:
     Flushes all pending operations to disk.
     :return: None
     """
-    Trade.query.session.flush()
+    Trade.commit()
 
 
 def clean_dry_run_db() -> None:
@@ -89,6 +89,7 @@ def clean_dry_run_db() -> None:
         # Check we are updating only a dry_run order not a prod one
         if 'dry_run' in trade.open_order_id:
             trade.open_order_id = None
+    Trade.commit()
 
 
 class Order(_DECL_BASE):
@@ -112,16 +113,17 @@ class Order(_DECL_BASE):
 
     trade = relationship("Trade", back_populates="orders")
 
-    ft_order_side = Column(String, nullable=False)
-    ft_pair = Column(String, nullable=False)
+    ft_order_side = Column(String(25), nullable=False)
+    ft_pair = Column(String(25), nullable=False)
     ft_is_open = Column(Boolean, nullable=False, default=True, index=True)
 
-    order_id = Column(String, nullable=False, index=True)
-    status = Column(String, nullable=True)
-    symbol = Column(String, nullable=True)
-    order_type = Column(String, nullable=True)
-    side = Column(String, nullable=True)
+    order_id = Column(String(255), nullable=False, index=True)
+    status = Column(String(255), nullable=True)
+    symbol = Column(String(25), nullable=True)
+    order_type = Column(String(50), nullable=True)
+    side = Column(String(25), nullable=True)
     price = Column(Float, nullable=True)
+    average = Column(Float, nullable=True)
     amount = Column(Float, nullable=True)
     filled = Column(Float, nullable=True)
     remaining = Column(Float, nullable=True)
@@ -150,15 +152,16 @@ class Order(_DECL_BASE):
         self.price = order.get('price', self.price)
         self.amount = order.get('amount', self.amount)
         self.filled = order.get('filled', self.filled)
+        self.average = order.get('average', self.average)
         self.remaining = order.get('remaining', self.remaining)
         self.cost = order.get('cost', self.cost)
         if 'timestamp' in order and order['timestamp'] is not None:
             self.order_date = datetime.fromtimestamp(order['timestamp'] / 1000, tz=timezone.utc)
 
         self.ft_is_open = True
-        if self.status in ('closed', 'canceled', 'cancelled'):
+        if self.status in NON_OPEN_EXCHANGE_STATES:
             self.ft_is_open = False
-            if order.get('filled', 0) > 0:
+            if (order.get('filled', 0.0) or 0.0) > 0:
                 self.order_filled_date = datetime.now(timezone.utc)
         self.order_update_date = datetime.now(timezone.utc)
 
@@ -175,6 +178,7 @@ class Order(_DECL_BASE):
         if filtered_orders:
             oobj = filtered_orders[0]
             oobj.update_from_ccxt_object(order)
+            Order.query.session.commit()
         else:
             logger.warning(f"Did not find order for {order}.")
 
@@ -191,6 +195,8 @@ class Order(_DECL_BASE):
     @staticmethod
     def get_open_orders() -> List['Order']:
         """
+        Retrieve open orders from the database
+        :return: List of open orders
         """
         return Order.query.filter(Order.ft_is_open.is_(True)).all()
 
@@ -253,6 +259,7 @@ class LocalTrade():
     sell_reason: str = ''
     sell_order_status: str = ''
     strategy: str = ''
+    buy_tag: Optional[str] = None
     timeframe: Optional[int] = None
 
     def __init__(self, **kwargs):
@@ -284,6 +291,7 @@ class LocalTrade():
             'amount_requested': round(self.amount_requested, 8) if self.amount_requested else None,
             'stake_amount': round(self.stake_amount, 8),
             'strategy': self.strategy,
+            'buy_tag': self.buy_tag,
             'timeframe': self.timeframe,
 
             'fee_open': self.fee_open,
@@ -348,12 +356,12 @@ class LocalTrade():
         LocalTrade.trades_open = []
         LocalTrade.total_profit = 0
 
-    def adjust_min_max_rates(self, current_price: float) -> None:
+    def adjust_min_max_rates(self, current_price: float, current_price_low: float) -> None:
         """
         Adjust the max_rate and min_rate.
         """
         self.max_rate = max(current_price, self.max_rate or self.open_rate)
-        self.min_rate = min(current_price, self.min_rate or self.open_rate)
+        self.min_rate = min(current_price_low, self.min_rate or self.open_rate)
 
     def _set_new_stoploss(self, new_loss: float, stoploss: float):
         """Assign new stop value"""
@@ -427,12 +435,13 @@ class LocalTrade():
         elif order_type in ('stop_loss_limit', 'stop-loss', 'stop-loss-limit', 'stop'):
             self.stoploss_order_id = None
             self.close_rate_requested = self.stop_loss
+            self.sell_reason = SellType.STOPLOSS_ON_EXCHANGE.value
             if self.is_open:
                 logger.info(f'{order_type.upper()} is hit for {self}.')
             self.close(safe_value_fallback(order, 'average', 'price'))
         else:
             raise ValueError(f'Unknown order type: {order_type}')
-        cleanup_db()
+        Trade.commit()
 
     def close(self, rate: float, *, show_msg: bool = True) -> None:
         """
@@ -483,6 +492,13 @@ class LocalTrade():
 
     def update_order(self, order: Dict) -> None:
         Order.update_orders(self.orders, order)
+
+    def get_exit_order_count(self) -> int:
+        """
+        Get amount of failed exiting orders
+        assumes full exits.
+        """
+        return len([o for o in self.orders if o.ft_order_side == 'sell'])
 
     def _calc_open_trade_value(self) -> float:
         """
@@ -631,7 +647,7 @@ class LocalTrade():
 
             # skip case if trailing-stop changed the stoploss already.
             if (trade.stop_loss == trade.initial_stop_loss
-               and trade.initial_stop_loss_pct != desired_stoploss):
+                    and trade.initial_stop_loss_pct != desired_stoploss):
                 # Stoploss value got changed
 
                 logger.info(f"Stoploss for {trade} needs adjustment...")
@@ -656,15 +672,15 @@ class Trade(_DECL_BASE, LocalTrade):
 
     orders = relationship("Order", order_by="Order.id", cascade="all, delete-orphan")
 
-    exchange = Column(String, nullable=False)
-    pair = Column(String, nullable=False, index=True)
+    exchange = Column(String(25), nullable=False)
+    pair = Column(String(25), nullable=False, index=True)
     is_open = Column(Boolean, nullable=False, default=True, index=True)
     fee_open = Column(Float, nullable=False, default=0.0)
     fee_open_cost = Column(Float, nullable=True)
-    fee_open_currency = Column(String, nullable=True)
+    fee_open_currency = Column(String(25), nullable=True)
     fee_close = Column(Float, nullable=False, default=0.0)
     fee_close_cost = Column(Float, nullable=True)
-    fee_close_currency = Column(String, nullable=True)
+    fee_close_currency = Column(String(25), nullable=True)
     open_rate = Column(Float)
     open_rate_requested = Column(Float)
     # open_trade_value - calculated via _calc_open_trade_value
@@ -678,7 +694,7 @@ class Trade(_DECL_BASE, LocalTrade):
     amount_requested = Column(Float)
     open_date = Column(DateTime, nullable=False, default=datetime.utcnow)
     close_date = Column(DateTime)
-    open_order_id = Column(String)
+    open_order_id = Column(String(255))
     # absolute value of the stop loss
     stop_loss = Column(Float, nullable=True, default=0.0)
     # percentage value of the stop loss
@@ -688,16 +704,17 @@ class Trade(_DECL_BASE, LocalTrade):
     # percentage value of the initial stop loss
     initial_stop_loss_pct = Column(Float, nullable=True)
     # stoploss order id which is on exchange
-    stoploss_order_id = Column(String, nullable=True, index=True)
+    stoploss_order_id = Column(String(255), nullable=True, index=True)
     # last update time of the stoploss order on exchange
     stoploss_last_update = Column(DateTime, nullable=True)
     # absolute value of the highest reached price
     max_rate = Column(Float, nullable=True, default=0.0)
     # Lowest price reached
     min_rate = Column(Float, nullable=True)
-    sell_reason = Column(String, nullable=True)
-    sell_order_status = Column(String, nullable=True)
-    strategy = Column(String, nullable=True)
+    sell_reason = Column(String(100), nullable=True)
+    sell_order_status = Column(String(100), nullable=True)
+    strategy = Column(String(100), nullable=True)
+    buy_tag = Column(String(100), nullable=True)
     timeframe = Column(Integer, nullable=True)
 
     def __init__(self, **kwargs):
@@ -710,7 +727,11 @@ class Trade(_DECL_BASE, LocalTrade):
             Order.query.session.delete(order)
 
         Trade.query.session.delete(self)
-        Trade.query.session.flush()
+        Trade.commit()
+
+    @staticmethod
+    def commit():
+        Trade.query.session.commit()
 
     @staticmethod
     def get_trades_proxy(*, pair: str = None, is_open: bool = None,
@@ -763,7 +784,7 @@ class Trade(_DECL_BASE, LocalTrade):
             return Trade.query
 
     @staticmethod
-    def get_open_order_trades():
+    def get_open_order_trades() -> List['Trade']:
         """
         Returns all open trades
         NOTE: Not supported in Backtesting.
@@ -793,6 +814,19 @@ class Trade(_DECL_BASE, LocalTrade):
                                  ]).all()
 
     @staticmethod
+    def get_total_closed_profit() -> float:
+        """
+        Retrieves total realized profit
+        """
+        if Trade.use_db:
+            total_profit = Trade.query.with_entities(
+                func.sum(Trade.close_profit_abs)).filter(Trade.is_open.is_(False)).scalar()
+        else:
+            total_profit = sum(
+                t.close_profit_abs for t in LocalTrade.get_trades_proxy(is_open=False))
+        return total_profit or 0
+
+    @staticmethod
     def total_open_trades_stakes() -> float:
         """
         Calculates total invested amount in open trades
@@ -807,24 +841,30 @@ class Trade(_DECL_BASE, LocalTrade):
         return total_open_stake_amount or 0
 
     @staticmethod
-    def get_overall_performance() -> List[Dict[str, Any]]:
+    def get_overall_performance(minutes=None) -> List[Dict[str, Any]]:
         """
         Returns List of dicts containing all Trades, including profit and trade count
         NOTE: Not supported in Backtesting.
         """
+        filters = [Trade.is_open.is_(False)]
+        if minutes:
+            start_date = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+            filters.append(Trade.close_date >= start_date)
         pair_rates = Trade.query.with_entities(
             Trade.pair,
             func.sum(Trade.close_profit).label('profit_sum'),
             func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
             func.count(Trade.pair).label('count')
-        ).filter(Trade.is_open.is_(False))\
+        ).filter(*filters)\
             .group_by(Trade.pair) \
             .order_by(desc('profit_sum_abs')) \
             .all()
         return [
             {
                 'pair': pair,
-                'profit': profit,
+                'profit_ratio': profit,
+                'profit': round(profit * 100, 2),  # Compatibility mode
+                'profit_pct': round(profit * 100, 2),
                 'profit_abs': profit_abs,
                 'count': count
             }
@@ -832,7 +872,124 @@ class Trade(_DECL_BASE, LocalTrade):
         ]
 
     @staticmethod
-    def get_best_pair():
+    def get_buy_tag_performance(pair: Optional[str]) -> List[Dict[str, Any]]:
+        """
+        Returns List of dicts containing all Trades, based on buy tag performance
+        Can either be average for all pairs or a specific pair provided
+        NOTE: Not supported in Backtesting.
+        """
+
+        filters = [Trade.is_open.is_(False)]
+        if(pair is not None):
+            filters.append(Trade.pair == pair)
+
+        buy_tag_perf = Trade.query.with_entities(
+            Trade.buy_tag,
+            func.sum(Trade.close_profit).label('profit_sum'),
+            func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
+            func.count(Trade.pair).label('count')
+        ).filter(*filters)\
+            .group_by(Trade.buy_tag) \
+            .order_by(desc('profit_sum_abs')) \
+            .all()
+
+        return [
+            {
+                'buy_tag': buy_tag if buy_tag is not None else "Other",
+                'profit_ratio': profit,
+                'profit_pct': round(profit * 100, 2),
+                'profit_abs': profit_abs,
+                'count': count
+            }
+            for buy_tag, profit, profit_abs, count in buy_tag_perf
+        ]
+
+    @staticmethod
+    def get_sell_reason_performance(pair: Optional[str]) -> List[Dict[str, Any]]:
+        """
+        Returns List of dicts containing all Trades, based on sell reason performance
+        Can either be average for all pairs or a specific pair provided
+        NOTE: Not supported in Backtesting.
+        """
+
+        filters = [Trade.is_open.is_(False)]
+        if(pair is not None):
+            filters.append(Trade.pair == pair)
+
+        sell_tag_perf = Trade.query.with_entities(
+            Trade.sell_reason,
+            func.sum(Trade.close_profit).label('profit_sum'),
+            func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
+            func.count(Trade.pair).label('count')
+        ).filter(*filters)\
+            .group_by(Trade.sell_reason) \
+            .order_by(desc('profit_sum_abs')) \
+            .all()
+
+        return [
+            {
+                'sell_reason': sell_reason if sell_reason is not None else "Other",
+                'profit_ratio': profit,
+                'profit_pct': round(profit * 100, 2),
+                'profit_abs': profit_abs,
+                'count': count
+            }
+            for sell_reason, profit, profit_abs, count in sell_tag_perf
+        ]
+
+    @staticmethod
+    def get_mix_tag_performance(pair: Optional[str]) -> List[Dict[str, Any]]:
+        """
+        Returns List of dicts containing all Trades, based on buy_tag + sell_reason performance
+        Can either be average for all pairs or a specific pair provided
+        NOTE: Not supported in Backtesting.
+        """
+
+        filters = [Trade.is_open.is_(False)]
+        if(pair is not None):
+            filters.append(Trade.pair == pair)
+
+        mix_tag_perf = Trade.query.with_entities(
+            Trade.id,
+            Trade.buy_tag,
+            Trade.sell_reason,
+            func.sum(Trade.close_profit).label('profit_sum'),
+            func.sum(Trade.close_profit_abs).label('profit_sum_abs'),
+            func.count(Trade.pair).label('count')
+        ).filter(*filters)\
+            .group_by(Trade.id) \
+            .order_by(desc('profit_sum_abs')) \
+            .all()
+
+        return_list: List[Dict] = []
+        for id, buy_tag, sell_reason, profit, profit_abs, count in mix_tag_perf:
+            buy_tag = buy_tag if buy_tag is not None else "Other"
+            sell_reason = sell_reason if sell_reason is not None else "Other"
+
+            if(sell_reason is not None and buy_tag is not None):
+                mix_tag = buy_tag + " " + sell_reason
+                i = 0
+                if not any(item["mix_tag"] == mix_tag for item in return_list):
+                    return_list.append({'mix_tag': mix_tag,
+                                        'profit': profit,
+                                        'profit_pct': round(profit * 100, 2),
+                                        'profit_abs': profit_abs,
+                                        'count': count})
+                else:
+                    while i < len(return_list):
+                        if return_list[i]["mix_tag"] == mix_tag:
+                            return_list[i] = {
+                                'mix_tag': mix_tag,
+                                'profit': profit + return_list[i]["profit"],
+                                'profit_pct': round(profit + return_list[i]["profit"] * 100, 2),
+                                'profit_abs': profit_abs + return_list[i]["profit_abs"],
+                                'count': 1 + return_list[i]["count"]}
+                        i += 1
+
+        return return_list
+
+    @staticmethod
+    def get_best_pair(start_date: datetime = datetime.fromtimestamp(0)):
         """
         Get best pair with closed trade.
         NOTE: Not supported in Backtesting.
@@ -840,7 +997,7 @@ class Trade(_DECL_BASE, LocalTrade):
         """
         best_pair = Trade.query.with_entities(
             Trade.pair, func.sum(Trade.close_profit).label('profit_sum')
-        ).filter(Trade.is_open.is_(False)) \
+        ).filter(Trade.is_open.is_(False) & (Trade.close_date >= start_date)) \
             .group_by(Trade.pair) \
             .order_by(desc('profit_sum')).first()
         return best_pair
@@ -854,8 +1011,8 @@ class PairLock(_DECL_BASE):
 
     id = Column(Integer, primary_key=True)
 
-    pair = Column(String, nullable=False, index=True)
-    reason = Column(String, nullable=True)
+    pair = Column(String(25), nullable=False, index=True)
+    reason = Column(String(255), nullable=True)
     # Time the pair was locked (start time)
     lock_time = Column(DateTime, nullable=False)
     # Time until the pair is locked (end time)
@@ -867,7 +1024,7 @@ class PairLock(_DECL_BASE):
         lock_time = self.lock_time.strftime(DATETIME_PRINT_FORMAT)
         lock_end_time = self.lock_end_time.strftime(DATETIME_PRINT_FORMAT)
         return (f'PairLock(id={self.id}, pair={self.pair}, lock_time={lock_time}, '
-                f'lock_end_time={lock_end_time})')
+                f'lock_end_time={lock_end_time}, reason={self.reason}, active={self.active})')
 
     @staticmethod
     def query_pair_locks(pair: Optional[str], now: datetime) -> Query:
@@ -876,7 +1033,6 @@ class PairLock(_DECL_BASE):
         :param pair: Pair to check for. Returns all current locks if pair is empty
         :param now: Datetime object (generated via datetime.now(timezone.utc)).
         """
-
         filters = [PairLock.lock_end_time > now,
                    # Only active locks
                    PairLock.active.is_(True), ]

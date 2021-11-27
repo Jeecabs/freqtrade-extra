@@ -1,3 +1,4 @@
+import datetime
 import re
 from datetime import timedelta
 from pathlib import Path
@@ -9,17 +10,20 @@ from arrow import Arrow
 from freqtrade.configuration import TimeRange
 from freqtrade.constants import DATETIME_PRINT_FORMAT, LAST_BT_RESULT_FN
 from freqtrade.data import history
-from freqtrade.data.btanalysis import get_latest_backtest_filename, load_backtest_data
+from freqtrade.data.btanalysis import (get_latest_backtest_filename, load_backtest_data,
+                                       load_backtest_stats)
 from freqtrade.edge import PairInfo
-from freqtrade.optimize.optimize_reports import (generate_backtest_stats, generate_daily_stats,
-                                                 generate_edge_table, generate_pair_metrics,
+from freqtrade.enums import SellType
+from freqtrade.optimize.optimize_reports import (_get_resample_from_period, generate_backtest_stats,
+                                                 generate_daily_stats, generate_edge_table,
+                                                 generate_pair_metrics,
+                                                 generate_periodic_breakdown_stats,
                                                  generate_sell_reason_stats,
                                                  generate_strategy_comparison,
-                                                 generate_trading_stats, store_backtest_stats,
-                                                 text_table_bt_results, text_table_sell_reason,
-                                                 text_table_strategy)
+                                                 generate_trading_stats, show_sorted_pairlist,
+                                                 store_backtest_stats, text_table_bt_results,
+                                                 text_table_sell_reason, text_table_strategy)
 from freqtrade.resolvers.strategy_resolver import StrategyResolver
-from freqtrade.strategy.interface import SellType
 from tests.data.test_history import _backup_file, _clean_test_file
 
 
@@ -27,25 +31,22 @@ def test_text_table_bt_results():
 
     results = pd.DataFrame(
         {
-            'pair': ['ETH/BTC', 'ETH/BTC'],
-            'profit_ratio': [0.1, 0.2],
-            'profit_abs': [0.2, 0.4],
-            'trade_duration': [10, 30],
-            'wins': [2, 0],
-            'draws': [0, 0],
-            'losses': [0, 0]
+            'pair': ['ETH/BTC', 'ETH/BTC', 'ETH/BTC'],
+            'profit_ratio': [0.1, 0.2, -0.05],
+            'profit_abs': [0.2, 0.4, -0.1],
+            'trade_duration': [10, 30, 20],
         }
     )
 
     result_str = (
-        '|    Pair |   Buys |   Avg Profit % |   Cum Profit % |   Tot Profit BTC |'
-        '   Tot Profit % |   Avg Duration |   Wins |   Draws |   Losses |\n'
-        '|---------+--------+----------------+----------------+------------------+'
-        '----------------+----------------+--------+---------+----------|\n'
-        '| ETH/BTC |      2 |          15.00 |          30.00 |       0.60000000 |'
-        '          15.00 |        0:20:00 |      2 |       0 |        0 |\n'
-        '|   TOTAL |      2 |          15.00 |          30.00 |       0.60000000 |'
-        '          15.00 |        0:20:00 |      2 |       0 |        0 |'
+        '|    Pair |   Buys |   Avg Profit % |   Cum Profit % |   Tot Profit BTC |   Tot Profit % |'
+        '   Avg Duration |   Win  Draw  Loss  Win% |\n'
+        '|---------+--------+----------------+----------------+------------------+----------------+'
+        '----------------+-------------------------|\n'
+        '| ETH/BTC |      3 |           8.33 |          25.00 |       0.50000000 |          12.50 |'
+        '        0:20:00 |     2     0     1  66.7 |\n'
+        '|   TOTAL |      3 |           8.33 |          25.00 |       0.50000000 |          12.50 |'
+        '        0:20:00 |     2     0     1  66.7 |'
     )
 
     pair_results = generate_pair_metrics(data={'ETH/BTC': {}}, stake_currency='BTC',
@@ -53,8 +54,8 @@ def test_text_table_bt_results():
     assert text_table_bt_results(pair_results, stake_currency='BTC') == result_str
 
 
-def test_generate_backtest_stats(default_conf, testdatadir):
-    default_conf.update({'strategy': 'DefaultStrategy'})
+def test_generate_backtest_stats(default_conf, testdatadir, tmpdir):
+    default_conf.update({'strategy': 'StrategyTestV2'})
     StrategyResolver.load_strategy(default_conf)
 
     results = {'DefStrat': {
@@ -81,6 +82,7 @@ def test_generate_backtest_stats(default_conf, testdatadir):
         'config': default_conf,
         'locks': [],
         'final_balance': 1000.02,
+        'rejected_signals': 20,
         'backtest_start_time': Arrow.utcnow().int_timestamp,
         'backtest_end_time': Arrow.utcnow().int_timestamp,
         }
@@ -128,6 +130,7 @@ def test_generate_backtest_stats(default_conf, testdatadir):
         'config': default_conf,
         'locks': [],
         'final_balance': 1000.02,
+        'rejected_signals': 20,
         'backtest_start_time': Arrow.utcnow().int_timestamp,
         'backtest_end_time': Arrow.utcnow().int_timestamp,
         }
@@ -148,8 +151,8 @@ def test_generate_backtest_stats(default_conf, testdatadir):
     assert strat_stats['pairlist'] == ['UNITTEST/BTC']
 
     # Test storing stats
-    filename = Path(testdatadir / 'btresult.json')
-    filename_last = Path(testdatadir / LAST_BT_RESULT_FN)
+    filename = Path(tmpdir / 'btresult.json')
+    filename_last = Path(tmpdir / LAST_BT_RESULT_FN)
     _backup_file(filename_last, copy_file=True)
     assert not filename.is_file()
 
@@ -159,7 +162,7 @@ def test_generate_backtest_stats(default_conf, testdatadir):
     last_fn = get_latest_backtest_filename(filename_last.parent)
     assert re.match(r"btresult-.*\.json", last_fn)
 
-    filename1 = (testdatadir / last_fn)
+    filename1 = Path(tmpdir / last_fn)
     assert filename1.is_file()
     content = filename1.read_text()
     assert 'max_drawdown' in content
@@ -270,14 +273,14 @@ def test_text_table_sell_reason():
     )
 
     result_str = (
-        '|   Sell Reason |   Sells |   Wins |   Draws |   Losses |'
-        '   Avg Profit % |   Cum Profit % |   Tot Profit BTC |   Tot Profit % |\n'
-        '|---------------+---------+--------+---------+----------+'
-        '----------------+----------------+------------------+----------------|\n'
-        '|           roi |       2 |      2 |       0 |        0 |'
-        '             15 |             30 |              0.6 |             15 |\n'
-        '|     stop_loss |       1 |      0 |       0 |        1 |'
-        '            -10 |            -10 |             -0.2 |             -5 |'
+        '|   Sell Reason |   Sells |   Win  Draws  Loss  Win% |   Avg Profit % |   Cum Profit % |'
+        '   Tot Profit BTC |   Tot Profit % |\n'
+        '|---------------+---------+--------------------------+----------------+----------------+'
+        '------------------+----------------|\n'
+        '|           roi |       2 |      2     0     0   100 |             15 |             30 |'
+        '              0.6 |             15 |\n'
+        '|     stop_loss |       1 |      0     0     1     0 |            -10 |            -10 |'
+        '             -0.2 |             -5 |'
     )
 
     sell_reason_stats = generate_sell_reason_stats(max_open_trades=2,
@@ -325,9 +328,12 @@ def test_text_table_strategy(default_conf):
     default_conf['max_open_trades'] = 2
     default_conf['dry_run_wallet'] = 3
     results = {}
+    date = datetime.datetime(year=2020, month=1, day=1, hour=12, minute=30)
+    delta = datetime.timedelta(days=1)
     results['TestStrategy1'] = {'results': pd.DataFrame(
         {
             'pair': ['ETH/BTC', 'ETH/BTC', 'ETH/BTC'],
+            'close_date': [date, date + delta, date + delta * 2],
             'profit_ratio': [0.1, 0.2, 0.3],
             'profit_abs': [0.2, 0.4, 0.5],
             'trade_duration': [10, 30, 10],
@@ -340,6 +346,7 @@ def test_text_table_strategy(default_conf):
     results['TestStrategy2'] = {'results': pd.DataFrame(
         {
             'pair': ['LTC/BTC', 'LTC/BTC', 'LTC/BTC'],
+            'close_date': [date, date + delta, date + delta * 2],
             'profit_ratio': [0.4, 0.2, 0.3],
             'profit_abs': [0.4, 0.4, 0.5],
             'trade_duration': [15, 30, 15],
@@ -351,18 +358,17 @@ def test_text_table_strategy(default_conf):
     ), 'config': default_conf}
 
     result_str = (
-        '|      Strategy |   Buys |   Avg Profit % |   Cum Profit % |   Tot'
-        ' Profit BTC |   Tot Profit % |   Avg Duration |   Wins |   Draws |   Losses |\n'
+        '|      Strategy |   Buys |   Avg Profit % |   Cum Profit % |   Tot Profit BTC |'
+        '   Tot Profit % |   Avg Duration |   Win  Draw  Loss  Win% |              Drawdown |\n'
         '|---------------+--------+----------------+----------------+------------------+'
-        '----------------+----------------+--------+---------+----------|\n'
+        '----------------+----------------+-------------------------+-----------------------|\n'
         '| TestStrategy1 |      3 |          20.00 |          60.00 |       1.10000000 |'
-        '          36.67 |        0:17:00 |      3 |       0 |        0 |\n'
+        '          36.67 |        0:17:00 |     3     0     0   100 | 0.00000000 BTC  0.00% |\n'
         '| TestStrategy2 |      3 |          30.00 |          90.00 |       1.30000000 |'
-        '          43.33 |        0:20:00 |      3 |       0 |        0 |'
+        '          43.33 |        0:20:00 |     3     0     0   100 | 0.00000000 BTC  0.00% |'
     )
 
     strategy_results = generate_strategy_comparison(all_results=results)
-
     assert text_table_strategy(strategy_results, 'BTC') == result_str
 
 
@@ -374,3 +380,44 @@ def test_generate_edge_table():
     assert generate_edge_table(results).count('| ETH/BTC |') == 1
     assert generate_edge_table(results).count(
         '|   Risk Reward Ratio |   Required Risk Reward |   Expectancy |') == 1
+
+
+def test_generate_periodic_breakdown_stats(testdatadir):
+    filename = testdatadir / "backtest-result_new.json"
+    bt_data = load_backtest_data(filename).to_dict(orient='records')
+
+    res = generate_periodic_breakdown_stats(bt_data, 'day')
+    assert isinstance(res, list)
+    assert len(res) == 21
+    day = res[0]
+    assert 'date' in day
+    assert 'draws' in day
+    assert 'loses' in day
+    assert 'wins' in day
+    assert 'profit_abs' in day
+
+    # Select empty dataframe!
+    res = generate_periodic_breakdown_stats([], 'day')
+    assert res == []
+
+
+def test__get_resample_from_period():
+
+    assert _get_resample_from_period('day') == '1d'
+    assert _get_resample_from_period('week') == '1w'
+    assert _get_resample_from_period('month') == '1M'
+    with pytest.raises(ValueError, match=r"Period noooo is not supported."):
+        _get_resample_from_period('noooo')
+
+
+def test_show_sorted_pairlist(testdatadir, default_conf, capsys):
+    filename = testdatadir / "backtest-result_new.json"
+    bt_data = load_backtest_stats(filename)
+    default_conf['backtest_show_pair_list'] = True
+
+    show_sorted_pairlist(default_conf, bt_data)
+
+    out, err = capsys.readouterr()
+    assert 'Pairs for Strategy StrategyTestV2: \n[' in out
+    assert 'TOTAL' not in out
+    assert '"ETH/BTC",  // ' in out

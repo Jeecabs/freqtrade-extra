@@ -5,9 +5,9 @@ import pytest
 from pandas import DataFrame
 
 from freqtrade.data.dataprovider import DataProvider
+from freqtrade.enums import RunMode
 from freqtrade.exceptions import ExchangeError, OperationalException
 from freqtrade.plugins.pairlistmanager import PairListManager
-from freqtrade.state import RunMode
 from tests.conftest import get_patched_exchange
 
 
@@ -66,7 +66,7 @@ def test_historic_ohlcv_dataformat(mocker, default_conf, ohlcv_history):
     hdf5loadmock.assert_not_called()
     jsonloadmock.assert_called_once()
 
-    # Swiching to dataformat hdf5
+    # Switching to dataformat hdf5
     hdf5loadmock.reset_mock()
     jsonloadmock.reset_mock()
     default_conf["dataformat_ohlcv"] = "hdf5"

@@ -12,8 +12,8 @@ from pandas import DataFrame, to_datetime
 
 from freqtrade.data.converter import ohlcv_to_dataframe
 from freqtrade.edge import Edge, PairInfo
+from freqtrade.enums import SellType
 from freqtrade.exceptions import OperationalException
-from freqtrade.strategy.interface import SellType
 from tests.conftest import get_patched_freqtradebot, log_has
 from tests.optimize import (BTContainer, BTrade, _build_backtest_dataframe,
                             _get_frame_time_from_offset)
@@ -29,7 +29,6 @@ from tests.optimize import (BTContainer, BTrade, _build_backtest_dataframe,
 
 tests_start_time = arrow.get(2018, 10, 3)
 timeframe_in_minute = 60
-_ohlc = {'date': 0, 'buy': 1, 'open': 2, 'high': 3, 'low': 4, 'close': 5, 'sell': 6, 'volume': 7}
 
 # Helpers for this test file
 

@@ -99,3 +99,8 @@ target/
 
 TODO.md
 
+!config_examples/config_binance.example.json
+!config_examples/config_bittrex.example.json
+!config_examples/config_ftx.example.json
+!config_examples/config_full.example.json
+!config_examples/config_kraken.example.json

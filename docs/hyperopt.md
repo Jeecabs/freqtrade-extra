@@ -44,14 +44,14 @@ usage: freqtrade hyperopt [-h] [-v] [--logfile FILE] [-V] [-c PATH] [-d PATH]
                           [--data-format-ohlcv {json,jsongz,hdf5}]
                           [--max-open-trades INT]
                           [--stake-amount STAKE_AMOUNT] [--fee FLOAT]
-                          [-p PAIRS [PAIRS ...]] [--hyperopt NAME]
-                          [--hyperopt-path PATH] [--eps] [--dmmp]
-                          [--enable-protections]
+                          [-p PAIRS [PAIRS ...]] [--hyperopt-path PATH]
+                          [--eps] [--dmmp] [--enable-protections]
                           [--dry-run-wallet DRY_RUN_WALLET] [-e INT]
-                          [--spaces {all,buy,sell,roi,stoploss,trailing,default} [{all,buy,sell,roi,stoploss,trailing,default} ...]]
+                          [--spaces {all,buy,sell,roi,stoploss,trailing,protection,default} [{all,buy,sell,roi,stoploss,trailing,protection,default} ...]]
                           [--print-all] [--no-color] [--print-json] [-j JOBS]
                           [--random-state INT] [--min-trades INT]
-                          [--hyperopt-loss NAME]
+                          [--hyperopt-loss NAME] [--disable-param-export]
+                          [--ignore-missing-spaces]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -61,7 +61,7 @@ optional arguments:
                         Specify what timerange of data to use.
   --data-format-ohlcv {json,jsongz,hdf5}
                         Storage format for downloaded candle (OHLCV) data.
-                        (default: `None`).
+                        (default: `json`).
   --max-open-trades INT
                         Override the value of the `max_open_trades`
                         configuration setting.
@@ -73,10 +73,8 @@ optional arguments:
   -p PAIRS [PAIRS ...], --pairs PAIRS [PAIRS ...]
                         Limit command to these pairs. Pairs are space-
                         separated.
-  --hyperopt NAME       Specify hyperopt class name which will be used by the
-                        bot.
-  --hyperopt-path PATH  Specify additional lookup path for Hyperopt and
-                        Hyperopt Loss functions.
+  --hyperopt-path PATH  Specify additional lookup path for Hyperopt Loss
+                        functions.
   --eps, --enable-position-stacking
                         Allow buying the same pair multiple times (position
                         stacking).
@@ -92,7 +90,7 @@ optional arguments:
                         Starting balance, used for backtesting / hyperopt and
                         dry-runs.
   -e INT, --epochs INT  Specify number of epochs (default: 100).
-  --spaces {all,buy,sell,roi,stoploss,trailing,default} [{all,buy,sell,roi,stoploss,trailing,default} ...]
+  --spaces {all,buy,sell,roi,stoploss,trailing,protection,default} [{all,buy,sell,roi,stoploss,trailing,protection,default} ...]
                         Specify which parameters to hyperopt. Space-separated
                         list.
   --print-all           Print all results, not only the best ones.
@@ -117,7 +115,13 @@ optional arguments:
                         Hyperopt-loss-functions are:
                         ShortTradeDurHyperOptLoss, OnlyProfitHyperOptLoss,
                         SharpeHyperOptLoss, SharpeHyperOptLossDaily,
-                        SortinoHyperOptLoss, SortinoHyperOptLossDaily
+                        SortinoHyperOptLoss, SortinoHyperOptLossDaily,
+                        CalmarHyperOptLoss, MaxDrawDownHyperOptLoss
+  --disable-param-export
+                        Disable automatic hyperopt parameter export.
+  --ignore-missing-spaces, --ignore-unparameterized-spaces
+                        Suppress errors for any requested Hyperopt spaces that
+                        do not contain any parameters.
 
 Common arguments:
   -v, --verbose         Verbose mode (-vv for more, -vvv to get all messages).
@@ -237,9 +241,9 @@ class MyAwesomeStrategy(IStrategy):
         dataframe['macdhist'] = macd['macdhist']
 
         bollinger = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
-        dataframe['bb_lowerband'] = boll['lowerband']
-        dataframe['bb_middleband'] = boll['middleband']
-        dataframe['bb_upperband'] = boll['upperband']
+        dataframe['bb_lowerband'] = bollinger['lowerband']
+        dataframe['bb_middleband'] = bollinger['middleband']
+        dataframe['bb_upperband'] = bollinger['upperband']
         return dataframe
 ```
 
@@ -249,15 +253,16 @@ We continue to define hyperoptable parameters:
 
 ```python
 class MyAwesomeStrategy(IStrategy):
-    buy_adx = IntParameter(20, 40, default=30, space="buy")
+    buy_adx = DecimalParameter(20, 40, decimals=1, default=30.1, space="buy")
     buy_rsi = IntParameter(20, 40, default=30, space="buy")
-    buy_adx_enabled = CategoricalParameter([True, False], space="buy")
-    buy_rsi_enabled = CategoricalParameter([True, False], space="buy")
-    buy_trigger = CategoricalParameter(['bb_lower', 'macd_cross_signal'], space="buy")
+    buy_adx_enabled = BooleanParameter(default=True, space="buy")
+    buy_rsi_enabled = CategoricalParameter([True, False], default=False, space="buy")
+    buy_trigger = CategoricalParameter(["bb_lower", "macd_cross_signal"], default="bb_lower", space="buy")
 ```
 
-Above definition says: I have five parameters I want to randomly combine to find the best combination.
-Two of them are integer values (`buy_adx` and `buy_rsi`) and I want you test in the range of values 20 to 40.  
+The above definition says: I have five parameters I want to randomly combine to find the best combination.  
+`buy_rsi` is an integer parameter, which will be tested between 20 and 40. This space has a size of 20.  
+`buy_adx` is a decimal parameter, which will be evaluated between 20 and 40 with 1 decimal place (so values are 20.1, 20.2, ...). This space has a size of 200.  
 Then we have three category variables. First two are either `True` or `False`.
 We use these to either enable or disable the ADX and RSI guards.
 The last one we call `trigger` and use it to decide which buy trigger we want to use.
@@ -313,6 +318,7 @@ There are four parameter types each suited for different purposes.
 * `DecimalParameter` - defines a floating point parameter with a limited number of decimals (default 3). Should be preferred instead of `RealParameter` in most cases.
 * `RealParameter` - defines a floating point parameter with upper and lower boundaries and no precision limit. Rarely used as it creates a space with a near infinite number of possibilities.
 * `CategoricalParameter` - defines a parameter with a predetermined number of choices.
+* `BooleanParameter` - Shorthand for `CategoricalParameter([True, False])` - great for "enable" parameters.
 
 !!! Tip "Disabling parameter optimization"
     Each parameter takes two boolean parameters:
@@ -323,7 +329,7 @@ There are four parameter types each suited for different purposes.
 !!! Warning
     Hyperoptable parameters cannot be used in `populate_indicators` - as hyperopt does not recalculate indicators for each epoch, so the starting value would be used in this case.
 
-### Optimizing an indicator parameter
+## Optimizing an indicator parameter
 
 Assuming you have a simple strategy in mind - a EMA cross strategy (2 Moving averages crossing) - and you'd like to find the ideal parameters for this strategy.
 
@@ -333,8 +339,8 @@ from functools import reduce
 
 import talib.abstract as ta
 
-from freqtrade.strategy import IStrategy
-from freqtrade.strategy import CategoricalParameter, DecimalParameter, IntParameter
+from freqtrade.strategy import (BooleanParameter, CategoricalParameter, DecimalParameter, 
+                                IStrategy, IntParameter)
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 
 class MyAwesomeStrategy(IStrategy):
@@ -402,10 +408,105 @@ While this strategy is most likely too simple to provide consistent profit, it s
 !!! Note
     `self.buy_ema_short.range` will act differently between hyperopt and other modes. For hyperopt, the above example may generate 48 new columns, however for all other modes (backtesting, dry/live), it will only generate the column for the selected value. You should therefore avoid using the resulting column with explicit values (values other than `self.buy_ema_short.value`).
 
+!!! Note
+    `range` property may also be used with `DecimalParameter` and `CategoricalParameter`. `RealParameter` does not provide this property due to infinite search space.
+
 ??? Hint "Performance tip"
     By doing the calculation of all possible indicators in `populate_indicators()`, the calculation of the indicator happens only once for every parameter.  
     While this may slow down the hyperopt startup speed, the overall performance will increase as the Hyperopt execution itself may pick the same value for multiple epochs (changing other values).
     You should however try to use space ranges as small as possible. Every new column will require more memory, and every possibility hyperopt can try will increase the search space.
+
+## Optimizing protections
+
+Freqtrade can also optimize protections. How you optimize protections is up to you, and the following should be considered as example only.
+
+The strategy will simply need to define the "protections" entry as property returning a list of protection configurations.
+
+``` python
+from pandas import DataFrame
+from functools import reduce
+
+import talib.abstract as ta
+
+from freqtrade.strategy import (BooleanParameter, CategoricalParameter, DecimalParameter, 
+                                IStrategy, IntParameter)
+import freqtrade.vendor.qtpylib.indicators as qtpylib
+
+class MyAwesomeStrategy(IStrategy):
+    stoploss = -0.05
+    timeframe = '15m'
+    # Define the parameter spaces
+    cooldown_lookback = IntParameter(2, 48, default=5, space="protection", optimize=True)
+    stop_duration = IntParameter(12, 200, default=5, space="protection", optimize=True)
+    use_stop_protection = BooleanParameter(default=True, space="protection", optimize=True)
+
+
+    @property
+    def protections(self):
+        prot = []
+
+        prot.append({
+            "method": "CooldownPeriod",
+            "stop_duration_candles": self.cooldown_lookback.value
+        })
+        if self.use_stop_protection.value:
+            prot.append({
+                "method": "StoplossGuard",
+                "lookback_period_candles": 24 * 3,
+                "trade_limit": 4,
+                "stop_duration_candles": self.stop_duration.value,
+                "only_per_pair": False
+            })
+
+        return prot
+
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        # ...
+        
+```
+
+You can then run hyperopt as follows:
+`freqtrade hyperopt --hyperopt-loss SharpeHyperOptLossDaily --strategy MyAwesomeStrategy --spaces protection`
+
+!!! Note
+    The protection space is not part of the default space, and is only available with the Parameters Hyperopt interface, not with the legacy hyperopt interface (which required separate hyperopt files).
+    Freqtrade will also automatically change the "--enable-protections" flag if the protection space is selected.
+
+!!! Warning
+    If protections are defined as property, entries from the configuration will be ignored.
+    It is therefore recommended to not define protections in the configuration.
+
+### Migrating from previous property setups
+
+A migration from a previous setup is pretty simple, and can be accomplished by converting the protections entry to a property.
+In simple terms, the following configuration will be converted to the below.
+
+``` python
+class MyAwesomeStrategy(IStrategy):
+    protections = [
+        {
+            "method": "CooldownPeriod",
+            "stop_duration_candles": 4
+        }
+    ]
+```
+
+Result
+
+``` python
+class MyAwesomeStrategy(IStrategy):
+    
+    @property
+    def protections(self):
+        return [
+            {
+                "method": "CooldownPeriod",
+                "stop_duration_candles": 4
+            }
+        ]
+```
+
+You will then obviously also change potential interesting entries to parameters to allow hyper-optimization.
 
 ## Loss-functions
 
@@ -416,12 +517,14 @@ This class should be in its own file within the `user_data/hyperopts/` directory
 
 Currently, the following loss functions are builtin:
 
-* `ShortTradeDurHyperOptLoss` (default legacy Freqtrade hyperoptimization loss function) - Mostly for short trade duration and avoiding losses.
-* `OnlyProfitHyperOptLoss` (which takes only amount of profit into consideration)
-* `SharpeHyperOptLoss` (optimizes Sharpe Ratio calculated on trade returns relative to standard deviation)
-* `SharpeHyperOptLossDaily` (optimizes Sharpe Ratio calculated on **daily** trade returns relative to standard deviation)
-* `SortinoHyperOptLoss` (optimizes Sortino Ratio calculated on trade returns relative to **downside** standard deviation)
-* `SortinoHyperOptLossDaily` (optimizes Sortino Ratio calculated on **daily** trade returns relative to **downside** standard deviation)
+* `ShortTradeDurHyperOptLoss` - (default legacy Freqtrade hyperoptimization loss function) - Mostly for short trade duration and avoiding losses.
+* `OnlyProfitHyperOptLoss` - takes only amount of profit into consideration.
+* `SharpeHyperOptLoss` - optimizes Sharpe Ratio calculated on trade returns relative to standard deviation.
+* `SharpeHyperOptLossDaily` - optimizes Sharpe Ratio calculated on **daily** trade returns relative to standard deviation.
+* `SortinoHyperOptLoss` - optimizes Sortino Ratio calculated on trade returns relative to **downside** standard deviation.
+* `SortinoHyperOptLossDaily` - optimizes Sortino Ratio calculated on **daily** trade returns relative to **downside** standard deviation.
+* `MaxDrawDownHyperOptLoss` - Optimizes Maximum drawdown.
+* `CalmarHyperOptLoss` - Optimizes Calmar Ratio calculated on trade returns relative to max drawdown.
 
 Creation of a custom loss function is covered in the [Advanced Hyperopt](advanced-hyperopt.md) part of the documentation.
 
@@ -459,7 +562,7 @@ For example, to use one month of data, pass `--timerange 20210101-20210201` (fro
 Full command:
 
 ```bash
-freqtrade hyperopt --hyperopt <hyperoptname> --strategy <strategyname> --timerange 20210101-20210201
+freqtrade hyperopt --strategy <strategyname> --timerange 20210101-20210201
 ```
 
 ### Running Hyperopt with Smaller Search Space
@@ -477,7 +580,8 @@ Legal values are:
 * `roi`: just optimize the minimal profit table for your strategy
 * `stoploss`: search for the best stoploss value
 * `trailing`: search for the best trailing stop values
-* `default`: `all` except `trailing`
+* `protection`: search for the best protection parameters (read the [protections section](#optimizing-protections) on how to properly define these)
+* `default`: `all` except `trailing` and `protection`
 * space-separated list of any of the above values for example `--spaces roi stoploss`
 
 The default Hyperopt Search Space, used when no `--space` command line option is specified, does not include the `trailing` hyperspace. We recommend you to run optimization for the `trailing` hyperspace separately, when the best parameters for other hyperspaces were found, validated and pasted into your custom strategy.
@@ -490,7 +594,7 @@ Given the following result from hyperopt:
 ```
 Best result:
 
-    44/100:    135 trades. Avg profit  0.57%. Total profit  0.03871918 BTC (0.7722Σ%). Avg duration 180.4 mins. Objective: 1.94367
+    44/100:    135 trades. Avg profit  0.57%. Total profit  0.03871918 BTC (0.7722%). Avg duration 180.4 mins. Objective: 1.94367
 
     # Buy hyperspace params:
     buy_params = {
@@ -508,7 +612,13 @@ You should understand this result like:
 * You should not use ADX because `'buy_adx_enabled': False`.
 * You should **consider** using the RSI indicator (`'buy_rsi_enabled': True`) and the best value is `29.0` (`'buy_rsi': 29.0`)
 
-Your strategy class can immediately take advantage of these results. Simply copy hyperopt results block and paste them at class level, replacing old parameters (if any). New parameters will automatically be loaded next time strategy is executed.
+### Automatic parameter application to the strategy
+
+When using Hyperoptable parameters, the result of your hyperopt-run will be written to a json file next to your strategy (so for `MyAwesomeStrategy.py`, the file would be `MyAwesomeStrategy.json`).  
+This file is also updated when using the `hyperopt-show` sub-command, unless `--disable-param-export` is provided to either of the 2 commands.
+
+
+Your strategy class can also contain these results explicitly. Simply copy hyperopt results block and paste them at class level, replacing old parameters (if any). New parameters will automatically be loaded next time strategy is executed.
 
 Transferring your whole hyperopt result to your strategy would then look like:
 
@@ -524,6 +634,10 @@ class MyAwesomeStrategy(IStrategy):
     }
 ```
 
+!!! Note
+    Values in the configuration file will overwrite Parameter-file level parameters - and both will overwrite parameters within the strategy.
+    The prevalence is therefore: config > parameter file > strategy
+
 ### Understand Hyperopt ROI results
 
 If you are optimizing ROI (i.e. if optimization search-space contains 'all', 'default' or 'roi'), your result will look as follows and include a ROI table:
@@ -531,7 +645,7 @@ If you are optimizing ROI (i.e. if optimization search-space contains 'all', 'de
 ```
 Best result:
 
-    44/100:    135 trades. Avg profit  0.57%. Total profit  0.03871918 BTC (0.7722Σ%). Avg duration 180.4 mins. Objective: 1.94367
+    44/100:    135 trades. Avg profit  0.57%. Total profit  0.03871918 BTC (0.7722%). Avg duration 180.4 mins. Objective: 1.94367
 
     # ROI table:
     minimal_roi = {
@@ -570,11 +684,11 @@ If you are optimizing ROI, Freqtrade creates the 'roi' optimization hyperspace f
 
 These ranges should be sufficient in most cases. The minutes in the steps (ROI dict keys) are scaled linearly depending on the timeframe used. The ROI values in the steps (ROI dict values) are scaled logarithmically depending on the timeframe used.
 
-If you have the `generate_roi_table()` and `roi_space()` methods in your custom hyperopt file, remove them in order to utilize these adaptive ROI tables and the ROI hyperoptimization space generated by Freqtrade by default.
+If you have the `generate_roi_table()` and `roi_space()` methods in your custom hyperopt, remove them in order to utilize these adaptive ROI tables and the ROI hyperoptimization space generated by Freqtrade by default.
 
 Override the `roi_space()` method if you need components of the ROI tables to vary in other ranges. Override the `generate_roi_table()` and `roi_space()` methods and implement your own custom approach for generation of the ROI tables during hyperoptimization if you need a different structure of the ROI tables or other amount of rows (steps).
 
-A sample for these methods can be found in [sample_hyperopt_advanced.py](https://github.com/freqtrade/freqtrade/blob/develop/freqtrade/templates/sample_hyperopt_advanced.py).
+A sample for these methods can be found in the [overriding pre-defined spaces section](advanced-hyperopt.md#overriding-pre-defined-spaces).
 
 !!! Note "Reduced search space"
     To limit the search space further, Decimals are limited to 3 decimal places (a precision of 0.001). This is usually sufficient, every value more precise than this will usually result in overfitted results. You can however [overriding pre-defined spaces](advanced-hyperopt.md#pverriding-pre-defined-spaces) to change this to your needs.
@@ -586,7 +700,7 @@ If you are optimizing stoploss values (i.e. if optimization search-space contain
 ```
 Best result:
 
-    44/100:    135 trades. Avg profit  0.57%. Total profit  0.03871918 BTC (0.7722Σ%). Avg duration 180.4 mins. Objective: 1.94367
+    44/100:    135 trades. Avg profit  0.57%. Total profit  0.03871918 BTC (0.7722%). Avg duration 180.4 mins. Objective: 1.94367
 
     # Buy hyperspace params:
     buy_params = {
@@ -616,7 +730,7 @@ If you are optimizing stoploss values, Freqtrade creates the 'stoploss' optimiza
 
 If you have the `stoploss_space()` method in your custom hyperopt file, remove it in order to utilize Stoploss hyperoptimization space generated by Freqtrade by default.
 
-Override the `stoploss_space()` method and define the desired range in it if you need stoploss values to vary in other range during hyperoptimization. A sample for this method can be found in [user_data/hyperopts/sample_hyperopt_advanced.py](https://github.com/freqtrade/freqtrade/blob/develop/freqtrade/templates/sample_hyperopt_advanced.py).
+Override the `stoploss_space()` method and define the desired range in it if you need stoploss values to vary in other range during hyperoptimization. A sample for this method can be found in the [overriding pre-defined spaces section](advanced-hyperopt.md#overriding-pre-defined-spaces).
 
 !!! Note "Reduced search space"
     To limit the search space further, Decimals are limited to 3 decimal places (a precision of 0.001). This is usually sufficient, every value more precise than this will usually result in overfitted results. You can however [overriding pre-defined spaces](advanced-hyperopt.md#pverriding-pre-defined-spaces) to change this to your needs.
@@ -628,7 +742,7 @@ If you are optimizing trailing stop values (i.e. if optimization search-space co
 ```
 Best result:
 
-    45/100:    606 trades. Avg profit  1.04%. Total profit  0.31555614 BTC ( 630.48Σ%). Avg duration 150.3 mins. Objective: -1.10161
+    45/100:    606 trades. Avg profit  1.04%. Total profit  0.31555614 BTC ( 630.48%). Avg duration 150.3 mins. Objective: -1.10161
 
     # Trailing stop:
     trailing_stop = True
@@ -654,10 +768,10 @@ As stated in the comment, you can also use it as the values of the corresponding
 
 If you are optimizing trailing stop values, Freqtrade creates the 'trailing' optimization hyperspace for you. By default, the `trailing_stop` parameter is always set to True in that hyperspace, the value of the `trailing_only_offset_is_reached` vary between True and False, the values of the `trailing_stop_positive` and `trailing_stop_positive_offset` parameters vary in the ranges 0.02...0.35 and 0.01...0.1 correspondingly, which is sufficient in most cases.
 
-Override the `trailing_space()` method and define the desired range in it if you need values of the trailing stop parameters to vary in other ranges during hyperoptimization. A sample for this method can be found in [user_data/hyperopts/sample_hyperopt_advanced.py](https://github.com/freqtrade/freqtrade/blob/develop/freqtrade/templates/sample_hyperopt_advanced.py).
+Override the `trailing_space()` method and define the desired range in it if you need values of the trailing stop parameters to vary in other ranges during hyperoptimization. A sample for this method can be found in the [overriding pre-defined spaces section](advanced-hyperopt.md#overriding-pre-defined-spaces).
 
 !!! Note "Reduced search space"
-    To limit the search space further, Decimals are limited to 3 decimal places (a precision of 0.001). This is usually sufficient, every value more precise than this will usually result in overfitted results. You can however [overriding pre-defined spaces](advanced-hyperopt.md#pverriding-pre-defined-spaces) to change this to your needs.
+    To limit the search space further, Decimals are limited to 3 decimal places (a precision of 0.001). This is usually sufficient, every value more precise than this will usually result in overfitted results. You can however [overriding pre-defined spaces](advanced-hyperopt.md#overriding-pre-defined-spaces) to change this to your needs.
 
 ### Reproducible results
 
@@ -717,8 +831,8 @@ After you run Hyperopt for the desired amount of epochs, you can later list all 
 
 Once the optimized strategy has been implemented into your strategy, you should backtest this strategy to make sure everything is working as expected.
 
-To achieve same results (number of trades, their durations, profit, etc.) than during Hyperopt, please use same configuration and parameters (timerange, timeframe, ...) used for hyperopt `--dmmp`/`--disable-max-market-positions` and `--eps`/`--enable-position-stacking` for Backtesting.
+To achieve same the results (number of trades, their durations, profit, etc.) as during Hyperopt, please use the same configuration and parameters (timerange, timeframe, ...) used for hyperopt `--dmmp`/`--disable-max-market-positions` and `--eps`/`--enable-position-stacking` for Backtesting.
 
-Should results don't match, please double-check to make sure you transferred all conditions correctly.
+Should results not match, please double-check to make sure you transferred all conditions correctly.
 Pay special care to the stoploss (and trailing stoploss) parameters, as these are often set in configuration files, which override changes to the strategy.
 You should also carefully review the log of your backtest to ensure that there were no parameters inadvertently set by the configuration (like `stoploss` or `trailing_stop`).
