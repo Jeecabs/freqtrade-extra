@@ -44,6 +44,6 @@ colorama==0.4.4
 # Requirement(s) for extra feature(s) (Fork exclusive)
 hjson==3.0.2 
 questionary==1.10.0
-prompt-toolkit==3.0.24
+prompt-toolkit==3.0.52
 # Extensions to datetime library
 python-dateutil==2.8.2
