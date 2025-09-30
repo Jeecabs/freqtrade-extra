@@ -42,7 +42,7 @@ colorama==0.4.4
 
 
 # Requirement(s) for extra feature(s) (Fork exclusive)
-hjson==3.0.2 
+hjson==3.1.0 
 questionary==1.10.0
 prompt-toolkit==3.0.24
 # Extensions to datetime library
