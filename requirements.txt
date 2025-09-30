@@ -46,4 +46,4 @@ hjson==3.0.2
 questionary==1.10.0
 prompt-toolkit==3.0.24
 # Extensions to datetime library
-python-dateutil==2.8.2
+python-dateutil==2.9.0.post0
