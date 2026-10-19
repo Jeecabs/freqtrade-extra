@@ -102,7 +102,7 @@ jobs:
         mypy freqtrade scripts
 
     - name: Discord notification
-      uses: rjstone/discord-webhook-notify@v1
+      uses: rjstone/discord-webhook-notify@v2
       if: failure() && ( github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
       with:
           severity: error
@@ -192,7 +192,7 @@ jobs:
         mypy freqtrade scripts
 
     - name: Discord notification
-      uses: rjstone/discord-webhook-notify@v1
+      uses: rjstone/discord-webhook-notify@v2
       if: failure() && ( github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
       with:
           severity: error
@@ -251,7 +251,7 @@ jobs:
         mypy freqtrade scripts
 
     - name: Discord notification
-      uses: rjstone/discord-webhook-notify@v1
+      uses: rjstone/discord-webhook-notify@v2
       if: failure() && ( github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
       with:
           severity: error
@@ -279,7 +279,7 @@ jobs:
         mkdocs build
 
     - name: Discord notification
-      uses: rjstone/discord-webhook-notify@v1
+      uses: rjstone/discord-webhook-notify@v2
       if: failure() && ( github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
       with:
           severity: error
@@ -310,7 +310,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Discord notification
-      uses: rjstone/discord-webhook-notify@v1
+      uses: rjstone/discord-webhook-notify@v2
       if: always() && steps.check.outputs.has-permission && ( github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
       with:
           severity: info
@@ -389,7 +389,7 @@ jobs:
         build_helpers/publish_docker_multi.sh
 
     - name: Discord notification
-      uses: rjstone/discord-webhook-notify@v1
+      uses: rjstone/discord-webhook-notify@v2
       if: always() && ( github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
       with:
           severity: info
